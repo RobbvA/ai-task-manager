@@ -1,0 +1,12 @@
+# Node
+**/node_modules/
+**/dist/
+**/build/
+**/*.log
+
+# Env files
+**/.env
+**/.env.*.local
+
+# Prisma (SQLite database file)
+**/prisma/dev.db*
