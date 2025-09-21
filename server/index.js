@@ -29,18 +29,63 @@ const UpdateTaskSchema = z.object({
   dueAt: z.string().datetime().nullable().optional(),
 });
 
+const ListTasksQuerySchema = z.object({
+  status: z.enum(["todo", "doing", "done"]).optional(),
+  priority: z.enum(["low", "medium", "high"]).optional(),
+  sort: z.enum(["createdAt", "dueAt", "priority"]).default("createdAt"),
+  order: z.enum(["asc", "desc"]).default("desc"),
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+  page: z.coerce.number().int().min(1).default(1), // 1-based
+});
+
 // ---- Routes ----
 
 // Health
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-// GET all tasks
-app.get("/api/tasks", async (_req, res) => {
+// GET all tasks (with filters/sort/pagination)
+app.get("/api/tasks", async (req, res) => {
   try {
-    const tasks = await prisma.task.findMany({
-      orderBy: { createdAt: "desc" },
+    const parsed = ListTasksQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res
+        .status(400)
+        .json({ error: "Invalid query", details: parsed.error.flatten() });
+    }
+
+    const { status, priority, sort, order, limit, page } = parsed.data;
+
+    const where = {
+      ...(status ? { status } : {}),
+      ...(priority ? { priority } : {}),
+    };
+
+    const skip = (page - 1) * limit;
+
+    const [items, total] = await Promise.all([
+      prisma.task.findMany({
+        where,
+        orderBy: { [sort]: order },
+        skip,
+        take: limit,
+      }),
+      prisma.task.count({ where }),
+    ]);
+
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+
+    return res.json({
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages,
+        sort,
+        order,
+        filters: { status, priority },
+      },
+      items,
     });
-    res.json(tasks);
   } catch (err) {
     console.error("GET /api/tasks error:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -105,6 +150,21 @@ app.patch("/api/tasks/:id", async (req, res) => {
       return res.status(404).json({ error: "Task not found" });
     console.error("PATCH /api/tasks/:id error:", err);
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DELETE /api/tasks/:id → remove a task
+app.delete("/api/tasks/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.task.delete({ where: { id } });
+    return res.status(204).send(); // No Content
+  } catch (err) {
+    if (err?.code === "P2025") {
+      return res.status(404).json({ error: "Task not found" });
+    }
+    console.error("DELETE /api/tasks/:id error:", err);
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
